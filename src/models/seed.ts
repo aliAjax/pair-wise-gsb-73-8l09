@@ -18,6 +18,7 @@ const evidence: ControlEvidence[] = [
     expiresAt: '2026-11-18',
     owner: '安全测试组',
     valid: true,
+    revision: 2,
   },
   {
     id: 'ev-02',
@@ -29,6 +30,7 @@ const evidence: ControlEvidence[] = [
     expiresAt: '2026-08-10',
     owner: '平台运维组',
     valid: false,
+    revision: 1,
   },
   {
     id: 'ev-03',
@@ -40,6 +42,7 @@ const evidence: ControlEvidence[] = [
     expiresAt: '2026-12-04',
     owner: '应用安全组',
     valid: true,
+    revision: 2,
   },
   {
     id: 'ev-04',
@@ -51,6 +54,7 @@ const evidence: ControlEvidence[] = [
     expiresAt: '2027-03-12',
     owner: '数据治理组',
     valid: true,
+    revision: 2,
   },
 ]
 
@@ -359,6 +363,7 @@ export const createSeedState = (): ThreatModelState => ({
       componentId: 'cmp-02',
       description: '基于角色与数据域的访问控制。',
       evidenceIds: ['ev-01'],
+      revision: 2,
     },
     {
       id: 'ctl-02',
@@ -369,6 +374,7 @@ export const createSeedState = (): ThreatModelState => ({
       componentId: 'cmp-04',
       description: '数据库与备份介质透明加密。',
       evidenceIds: ['ev-02'],
+      revision: 1,
     },
     {
       id: 'ctl-03',
@@ -379,6 +385,7 @@ export const createSeedState = (): ThreatModelState => ({
       componentId: 'cmp-05',
       description: '对导出范围、频率与目标文件进行规则检测。',
       evidenceIds: ['ev-03'],
+      revision: 2,
     },
     {
       id: 'ctl-04',
@@ -389,6 +396,7 @@ export const createSeedState = (): ThreatModelState => ({
       componentId: 'cmp-04',
       description: '高敏归档任务需申请人与复核人共同确认。',
       evidenceIds: ['ev-04'],
+      revision: 1,
     },
   ],
   evidence,
@@ -500,6 +508,7 @@ export const createSeedState = (): ThreatModelState => ({
       owner: '数据治理组',
       acceptanceExpiresAt: '2026-10-01',
       acceptanceCondition: '过渡期内按日抽检导出记录，发现异常立即冻结账号。',
+      acceptanceRevision: 2,
     },
     {
       id: 'risk-04',
@@ -516,4 +525,6 @@ export const createSeedState = (): ThreatModelState => ({
   versions: baselineVersions,
   audit,
   currentRevision: 2,
+  revisionChain: [],
+  schemaVersion: 2,
 })

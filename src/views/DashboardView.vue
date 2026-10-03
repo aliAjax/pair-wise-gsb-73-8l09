@@ -96,20 +96,27 @@ const componentName = (id: string): string =>
           <h2 class="panel-title">版本与会签</h2>
           <RouterLink to="/reviews" class="text-link">进入会签中心</RouterLink>
         </div>
+        <div class="revision-strip">当前有效修订 <strong>v1.{{ store.data.currentRevision }}</strong>，会签仅在此修订上放行</div>
+        <div v-if="store.pendingConfirmations.length > 0" class="pending-confirmation">
+          <RouterLink v-for="threat in store.pendingConfirmations" :key="threat.id" to="/threats" class="pending-row">
+            <i class="pi pi-exclamation-triangle"></i>
+            <span>{{ threat.code }} 并发草稿待确认</span>
+          </RouterLink>
+        </div>
         <div class="review-list">
           <article v-for="threat in store.pendingReviews" :key="threat.id" class="review-row">
             <div class="review-code">{{ threat.code }}</div>
             <div class="review-main">
               <strong>{{ threat.title }}</strong>
               <span>
-                v1.{{ threat.revision }} ·
-                {{ store.reviewProgress(store.data.decisions.filter((decision) => decision.threatId === threat.id && decision.revision === threat.revision)) }}%
+                有效修订 v1.{{ threat.revision }} ·
+                {{ store.reviewProgress(store.effectiveDecisions(threat)) }}%
                 会签进度
               </span>
             </div>
             <span class="muted">{{ threat.componentIds.map(componentName).join(' / ') }}</span>
           </article>
-          <div v-if="store.pendingReviews.length === 0" class="empty-state">没有待会签威胁。</div>
+          <div v-if="store.pendingReviews.length === 0" class="empty-state">当前有效修订上没有待会签威胁。</div>
         </div>
       </section>
     </div>
@@ -235,6 +242,39 @@ const componentName = (id: string): string =>
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.revision-strip {
+  margin: 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #d7e2ef;
+  border-radius: 5px;
+  background: #f4f8fc;
+  color: #51607a;
+  font-size: 12px;
+}
+
+.revision-strip strong {
+  color: #3268a6;
+}
+
+.pending-confirmation {
+  display: grid;
+  gap: 6px;
+  margin: 10px 16px 0;
+}
+
+.pending-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f0d2a8;
+  border-radius: 5px;
+  background: #fffaf2;
+  color: #b45309;
+  font-size: 12px;
+  text-decoration: none;
 }
 
 .score-tag {

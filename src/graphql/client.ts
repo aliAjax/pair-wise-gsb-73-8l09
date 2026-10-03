@@ -3,7 +3,7 @@ import { loadState } from '@/services/repository'
 import { dashboardMetrics, evidenceIsExpired } from '@/services/selectors'
 
 const resolveOperation = (operationName: string): Record<string, unknown> => {
-  const state = loadState()
+  const state = loadState().state
 
   if (operationName === 'DashboardMetrics') {
     return { dashboardMetrics: dashboardMetrics(state) }

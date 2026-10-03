@@ -92,6 +92,18 @@ const approvalLabel = (snapshot: VersionSnapshot): string =>
     const threat = store.data.threats.find((item) => item.id === id)
     return threat?.reviewStatus === 'approved'
   }).length}/${snapshot.affectedThreatIds.length}`
+
+const reasonLabels: Record<string, string> = {
+  threat_edit: '威胁编辑',
+  threat_conflict: '并发保存',
+  control_change: '控制变更',
+  evidence_change: '证据变更',
+  component_change: '组件变更',
+  flow_change: '数据流变更',
+  risk_accept: '风险接受',
+  decision: '会签意见',
+  version: '版本快照',
+}
 </script>
 
 <template>
@@ -189,7 +201,7 @@ const approvalLabel = (snapshot: VersionSnapshot): string =>
           <span class="muted">{{ store.data.audit.length }} 条</span>
         </div>
         <div class="audit-list">
-          <article v-for="event in store.data.audit.slice(0, 12)" :key="event.id" class="audit-item">
+          <article v-for="event in store.data.audit.slice(0, 8)" :key="event.id" class="audit-item">
             <i class="pi pi-circle-fill"></i>
             <div>
               <strong>{{ event.action }}</strong>
@@ -197,6 +209,24 @@ const approvalLabel = (snapshot: VersionSnapshot): string =>
               <span>{{ event.actor }} · {{ new Date(event.createdAt).toLocaleString('zh-CN') }}</span>
             </div>
           </article>
+        </div>
+
+        <div class="panel-header chain-header">
+          <h2 class="panel-title">修订链</h2>
+          <span class="muted">{{ store.revisionChain.length }} 条已落盘</span>
+        </div>
+        <div class="audit-list">
+          <article v-for="entry in store.revisionChain.slice(-8).reverse()" :key="entry.id" class="audit-item">
+            <i class="pi pi-circle-fill chain-dot"></i>
+            <div>
+              <strong>v1.{{ entry.revision }} · {{ reasonLabels[entry.reason] ?? entry.reason }}</strong>
+              <p>{{ entry.detail }}</p>
+              <span>{{ entry.actor }} · {{ new Date(entry.createdAt).toLocaleString('zh-CN') }} · {{ entry.operations.length }} 个操作</span>
+            </div>
+          </article>
+          <div v-if="store.revisionChain.length === 0" class="empty-state">
+            基线数据，首次编辑后修订链开始累积。
+          </div>
         </div>
       </section>
     </div>
@@ -369,5 +399,15 @@ const approvalLabel = (snapshot: VersionSnapshot): string =>
 .audit-item span {
   color: #8992a1;
   font-size: 10px;
+}
+
+.chain-header {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #e8ebf0;
+}
+
+.chain-dot {
+  color: #2f8f69 !important;
 }
 </style>

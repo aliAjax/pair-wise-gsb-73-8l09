@@ -149,12 +149,21 @@ const saveComponent = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '名称、信任区和负责人不能为空', life: 3000 })
     return
   }
-  store.saveEntity('components', {
-    ...componentForm,
-    id: componentForm.id || createId('cmp'),
-  })
+  const previous = componentForm.id
+    ? store.data.components.find((item) => item.id === componentForm.id)
+    : undefined
+  store.saveArchitectureEntity(
+    'components',
+    { ...componentForm, id: componentForm.id || createId('cmp') },
+    previous,
+  )
   componentVisible.value = false
-  toast.add({ severity: 'success', summary: '组件已保存', detail: componentForm.name, life: 2500 })
+  toast.add({
+    severity: 'success',
+    summary: '组件已保存',
+    detail: `已推进 v1.${store.data.currentRevision}，关联威胁需重新会签`,
+    life: 3000,
+  })
 }
 
 const saveFlow = (): void => {
@@ -166,9 +175,21 @@ const saveFlow = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '源组件与目标组件不能相同', life: 3000 })
     return
   }
-  store.saveEntity('flows', { ...flowForm, id: flowForm.id || createId('flow') })
+  const previous = flowForm.id
+    ? store.data.flows.find((item) => item.id === flowForm.id)
+    : undefined
+  store.saveArchitectureEntity(
+    'flows',
+    { ...flowForm, id: flowForm.id || createId('flow') },
+    previous,
+  )
   flowVisible.value = false
-  toast.add({ severity: 'success', summary: '数据流已保存', detail: flowForm.name, life: 2500 })
+  toast.add({
+    severity: 'success',
+    summary: '数据流已保存',
+    detail: `已推进 v1.${store.data.currentRevision}，关联威胁需重新会签`,
+    life: 3000,
+  })
 }
 
 const saveDependency = (): void => {

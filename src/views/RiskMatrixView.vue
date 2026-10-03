@@ -10,7 +10,7 @@ import { useToast } from 'primevue/usetoast'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import type { Risk } from '@/models/domain'
-import { riskLevel, riskScore } from '@/services/selectors'
+import { isRiskAcceptanceCurrent, riskLevel, riskScore } from '@/services/selectors'
 import { useThreatModelStore } from '@/stores/threatModel'
 
 const store = useThreatModelStore()
@@ -46,9 +46,31 @@ const submitAcceptance = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '到期日与接受条件不能为空', life: 3000 })
     return
   }
-  store.acceptRisk(selectedRiskId.value, acceptanceForm.expiresAt, acceptanceForm.condition)
+  const outcome = store.acceptRisk(selectedRiskId.value, acceptanceForm.expiresAt, acceptanceForm.condition)
   acceptanceVisible.value = false
-  toast.add({ severity: 'success', summary: '风险接受已记录', detail: '已写入审计轨迹', life: 2500 })
+  if (outcome.recoveredEntries > 0) {
+    toast.add({ severity: 'warn', summary: '已从修订链恢复', detail: '写入失败后仅补写未完成对象', life: 4000 })
+  }
+  toast.add({
+    severity: 'success',
+    summary: '风险接受已记录',
+    detail: `已绑定当前有效修订 v1.${store.data.currentRevision}，关联威胁需重新会签放行`,
+    life: 3000,
+  })
+}
+
+const linkedThreatRevision = (risk: Risk): number =>
+  Math.max(
+    0,
+    ...store.data.threats
+      .filter((threat) => threat.riskIds.includes(risk.id))
+      .map((threat) => threat.revision),
+  )
+
+const acceptanceStale = (risk: Risk): boolean => {
+  if (typeof risk.acceptanceRevision !== 'number') return false
+  // 仍标记接受但依据落后，或接受已随失效转回处置中，都需要在新修订上重新接受
+  return !isRiskAcceptanceCurrent(risk, linkedThreatRevision(risk))
 }
 </script>
 
@@ -118,6 +140,15 @@ const submitAcceptance = (): void => {
               <StatusTag :value="data.status" kind="status" />
             </template>
           </Column>
+          <Column header="接受依据" style="width: 175px">
+            <template #body="{ data }">
+              <span v-if="typeof data.acceptanceRevision === 'number'" :class="{ 'stale-basis': acceptanceStale(data) }">
+                v1.{{ data.acceptanceRevision }} / 威胁 v1.{{ linkedThreatRevision(data) }}
+                <em v-if="acceptanceStale(data)">已失效</em>
+              </span>
+              <span v-else class="muted">-</span>
+            </template>
+          </Column>
           <Column header="操作" style="width: 180px">
             <template #body="{ data }">
               <Button label="接受" size="small" text @click="openAcceptance(data)" />
@@ -130,7 +161,7 @@ const submitAcceptance = (): void => {
       <aside class="validation-panel">
         <h2>风险校验</h2>
         <article
-          v-for="issue in store.issues.filter((item) => ['risk_acceptance_expired', 'control_failed', 'missing_evidence'].includes(item.kind))"
+          v-for="issue in store.issues.filter((item) => ['risk_acceptance_expired', 'risk_acceptance_invalidated', 'control_failed', 'missing_evidence'].includes(item.kind))"
           :key="issue.id"
           class="validation-item"
           :class="{ error: issue.severity === 'critical' || issue.severity === 'high' }"
@@ -249,5 +280,17 @@ const submitAcceptance = (): void => {
 .acceptance-form {
   display: grid;
   gap: 16px;
+}
+
+.stale-basis {
+  color: #b45309;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.stale-basis em {
+  margin-left: 4px;
+  font-style: normal;
+  font-weight: 700;
 }
 </style>

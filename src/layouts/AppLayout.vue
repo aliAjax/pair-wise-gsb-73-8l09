@@ -70,6 +70,10 @@ const reset = (): void => {
           <span>当前基线 v1.{{ store.data.currentRevision }}</span>
         </div>
         <div class="topbar-actions">
+          <span v-if="store.lastRecoveryNote" class="recovery-state" :title="store.lastRecoveryNote">
+            <i class="pi pi-refresh"></i>
+            {{ store.lastRecoveryNote }}
+          </span>
           <span class="sync-state">
             <i class="pi pi-cloud-upload"></i>
             最后保存 {{ new Date(store.lastSavedAt).toLocaleTimeString('zh-CN') }}
@@ -226,6 +230,15 @@ const reset = (): void => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+}
+
+.recovery-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 360px;
+  color: #b45309;
+  font-size: 12px;
 }
 
 .content-shell {

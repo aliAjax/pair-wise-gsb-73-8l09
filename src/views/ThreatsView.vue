@@ -24,6 +24,8 @@ const statusFilter = ref<string | null>(null)
 const categoryFilter = ref<string | null>(null)
 const selectedId = ref(store.data.threats[0]?.id ?? '')
 const editorVisible = ref(false)
+/** 页面/编辑器打开时记住的修订号，用于检测两个标签页的并发保存 */
+const editingBaseRevision = ref(store.data.currentRevision)
 
 const severityOptions = [
   { label: '严重', value: 'critical' },
@@ -90,6 +92,29 @@ const filteredThreats = computed(() => {
 const selectedThreat = computed(
   () => store.data.threats.find((threat) => threat.id === selectedId.value) ?? null,
 )
+const currentDecisions = computed(() =>
+  selectedThreat.value ? store.effectiveDecisions(selectedThreat.value) : [],
+)
+const staleDecisionCount = computed(() => {
+  if (!selectedThreat.value) return 0
+  return store.data.decisions.filter(
+    (decision) =>
+      decision.threatId === selectedThreat.value?.id &&
+      decision.revision < selectedThreat.value.revision,
+  ).length
+})
+const revisionBasisRisks = computed(() => {
+  if (!selectedThreat.value) return []
+  return selectedThreat.value.riskIds
+    .map((id) => store.data.risks.find((risk) => risk.id === id))
+    .filter((risk): risk is NonNullable<typeof risk> => Boolean(risk))
+    .map((risk) => ({
+      ...risk,
+      stale:
+        typeof risk.acceptanceRevision === 'number' &&
+        (risk.acceptanceRevision ?? 0) < (selectedThreat.value?.revision ?? 0),
+    }))
+})
 const relatedComponents = computed(
   () =>
     selectedThreat.value?.componentIds
@@ -119,6 +144,8 @@ const clearFilters = (): void => {
 const editThreat = (): void => {
   if (!selectedThreat.value) return
   Object.assign(threatForm, structuredClone(selectedThreat.value))
+  // 打开编辑器时记住当前修订号
+  editingBaseRevision.value = selectedThreat.value.revision
   editorVisible.value = true
 }
 
@@ -140,7 +167,10 @@ const addThreat = (): void => {
     riskIds: [],
     reviewStatus: 'draft',
     revision: store.data.currentRevision,
+    pendingConfirmation: false,
+    pendingBaseSnapshot: undefined,
   } satisfies Threat)
+  editingBaseRevision.value = store.data.currentRevision
   editorVisible.value = true
 }
 
@@ -161,19 +191,50 @@ const saveThreat = (): void => {
     return
   }
 
-  const saved: Threat = {
+  const candidate: Threat = {
     ...threatForm,
     id: threatForm.id || createId('thr'),
-    revision: threatForm.id ? store.data.currentRevision + 1 : store.data.currentRevision,
-    reviewStatus: threatForm.id ? 'in_review' : threatForm.reviewStatus,
   }
-  store.saveThreat(saved)
-  selectedId.value = saved.id
+  const outcome = store.saveThreat(candidate, editingBaseRevision.value)
+  if (outcome.recoveredEntries > 0) {
+    toast.add({
+      severity: 'warn',
+      summary: '已从修订链恢复',
+      detail: `主仓库写入失败，仅补写未完成对象 ${outcome.recoveredEntries} 条，未重复追加记录`,
+      life: 4000,
+    })
+  }
+  if (outcome.conflict) {
+    selectedId.value = candidate.id
+    editorVisible.value = false
+    toast.add({
+      severity: 'warn',
+      summary: '检测到并发保存',
+      detail: '另一标签页已先保存该威胁，你的草稿已保留并转待确认',
+      life: 4500,
+    })
+    return
+  }
+  selectedId.value = candidate.id
   editorVisible.value = false
   toast.add({
     severity: 'success',
     summary: '威胁已保存',
-    detail: saved.id === threatForm.id ? '修订后已进入重新审核' : saved.title,
+    detail: threatForm.id ? `已进入 v1.${store.data.currentRevision} 重新审核` : threatForm.title,
+    life: 3000,
+  })
+}
+
+const resolveConflict = (resolution: 'apply_draft' | 'discard_draft'): void => {
+  if (!selectedThreat.value) return
+  store.resolveThreatConflict(selectedThreat.value.id, resolution, selectedThreat.value)
+  toast.add({
+    severity: 'success',
+    summary: resolution === 'apply_draft' ? '已采用草稿' : '已放弃草稿',
+    detail:
+      resolution === 'apply_draft'
+        ? '草稿在新修订上生效，三方需重新会签'
+        : '已恢复另一标签页先保存的版本',
     life: 3000,
   })
 }
@@ -272,6 +333,25 @@ const saveThreat = (): void => {
 
       <aside class="panel detail-panel">
         <template v-if="selectedThreat">
+          <div v-if="selectedThreat.pendingConfirmation" class="conflict-strip">
+            <div>
+              <strong>并发保存 · 待确认</strong>
+              <span>
+                另一标签页已先保存为 v1.{{ selectedThreat.pendingBaseSnapshot?.revision }}；
+                当前内容是你的草稿，需选择采用草稿（进入新修订重新会签）或放弃草稿。
+              </span>
+            </div>
+            <div class="conflict-actions">
+              <Button label="采用草稿" size="small" @click="resolveConflict('apply_draft')" />
+              <Button
+                label="放弃草稿"
+                size="small"
+                severity="secondary"
+                outlined
+                @click="resolveConflict('discard_draft')"
+              />
+            </div>
+          </div>
           <div class="detail-head">
             <div>
               <div class="threat-code">{{ selectedThreat.code }}</div>
@@ -283,10 +363,28 @@ const saveThreat = (): void => {
             <StatusTag :value="selectedThreat.severity" kind="severity" />
             <StatusTag :value="selectedThreat.status" kind="status" />
             <StatusTag :value="selectedThreat.reviewStatus" kind="review" />
-            <span class="muted">v1.{{ selectedThreat.revision }}</span>
+            <span class="muted">有效修订 v1.{{ selectedThreat.revision }}</span>
+            <span v-if="selectedThreat.revision < store.data.currentRevision" class="muted">
+              · 基线 v1.{{ store.data.currentRevision }}
+            </span>
           </div>
 
           <p class="description">{{ selectedThreat.description }}</p>
+
+          <section class="detail-section">
+            <h3>修订依据</h3>
+            <div class="revision-basis">
+              <div v-for="risk in revisionBasisRisks" :key="risk.id" class="basis-row" :class="{ stale: risk.stale }">
+                <strong>{{ risk.code }} {{ risk.title }}</strong>
+                <span v-if="typeof risk.acceptanceRevision === 'number'">
+                  风险接受依据 v1.{{ risk.acceptanceRevision }}
+                  <em v-if="risk.stale">（已随修订失效，需重新接受并会签）</em>
+                  <em v-else>（有效）</em>
+                </span>
+                <span v-else class="muted">未接受风险</span>
+              </div>
+            </div>
+          </section>
 
           <section class="detail-section">
             <h3>关联组件</h3>
@@ -314,9 +412,24 @@ const saveThreat = (): void => {
             <div v-for="control in relatedControls" :key="control?.id" class="control-line">
               <div>
                 <strong>{{ control?.name }}</strong>
-                <span>{{ control?.type }} · {{ control?.owner }}</span>
+                <span>{{ control?.type }} · {{ control?.owner }} · v1.{{ control?.revision }}</span>
               </div>
               <StatusTag v-if="control" :value="control.status" kind="status" />
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <h3>当前有效修订会签（{{ currentDecisions.length }}/3）</h3>
+            <div v-for="decision in currentDecisions" :key="decision.id" class="decision-line">
+              <strong>{{ decision.actor }}</strong>
+              <StatusTag :value="decision.decision" kind="review" />
+              <span class="muted">{{ decision.comment }}</span>
+            </div>
+            <div v-if="currentDecisions.length === 0" class="muted">
+              v1.{{ selectedThreat.revision }} 上尚无会签，三方需重新签署。
+            </div>
+            <div v-if="staleDecisionCount > 0" class="stale-note">
+              另有 {{ staleDecisionCount }} 条旧修订会签意见已随 v1.{{ selectedThreat.revision }} 失效。
             </div>
           </section>
         </template>
@@ -571,5 +684,82 @@ const saveThreat = (): void => {
 
 .control-line + .control-line {
   margin-top: 8px;
+}
+
+.conflict-strip {
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #f0d2a8;
+  background: #fff7ec;
+}
+
+.conflict-strip > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.conflict-strip strong {
+  color: #b45309;
+  font-size: 13px;
+}
+
+.conflict-strip span {
+  color: #7b5d2c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.revision-basis {
+  display: grid;
+  gap: 8px;
+}
+
+.basis-row {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #e2e6ec;
+  border-radius: 5px;
+}
+
+.basis-row strong {
+  font-size: 12px;
+}
+
+.basis-row span {
+  color: #5b687d;
+  font-size: 11px;
+}
+
+.basis-row em {
+  font-style: normal;
+  color: #b45309;
+}
+
+.basis-row.stale {
+  border-color: #f0d2a8;
+  background: #fffaf2;
+}
+
+.decision-line {
+  display: grid;
+  grid-template-columns: 70px auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #eef0f3;
+  font-size: 12px;
+}
+
+.stale-note {
+  margin-top: 8px;
+  color: #b45309;
+  font-size: 11px;
 }
 </style>

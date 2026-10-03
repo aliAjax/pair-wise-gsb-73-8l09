@@ -9,7 +9,7 @@ import Select from 'primevue/select'
 import { useToast } from 'primevue/usetoast'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
-import type { ControlEvidence } from '@/models/domain'
+import type { ControlEvidence, SecurityControl } from '@/models/domain'
 import { createId } from '@/services/repository'
 import { evidenceIsExpired } from '@/services/selectors'
 import { useThreatModelStore } from '@/stores/threatModel'
@@ -17,6 +17,7 @@ import { useThreatModelStore } from '@/stores/threatModel'
 const store = useThreatModelStore()
 const toast = useToast()
 const editorVisible = ref(false)
+const controlEditorVisible = ref(false)
 const validityFilter = ref<string | null>(null)
 const controlFilter = ref<string | null>(null)
 
@@ -43,6 +44,30 @@ const form = reactive<ControlEvidence>({
   expiresAt: '',
   owner: '',
   valid: true,
+  revision: 0,
+})
+
+const controlStatusOptions = [
+  { label: '有效', value: 'effective' },
+  { label: '降级', value: 'degraded' },
+  { label: '失效', value: 'failed' },
+  { label: '计划中', value: 'planned' },
+]
+const controlTypeOptions = [
+  { label: '预防型', value: 'preventive' },
+  { label: '检测型', value: 'detective' },
+  { label: '纠正型', value: 'corrective' },
+]
+const controlForm = reactive<SecurityControl>({
+  id: '',
+  name: '',
+  type: 'preventive',
+  status: 'effective',
+  owner: '',
+  componentId: '',
+  description: '',
+  evidenceIds: [],
+  revision: 0,
 })
 
 const filteredEvidence = computed(() =>
@@ -86,9 +111,30 @@ const openEditor = (evidence?: ControlEvidence): void => {
           expiresAt: '',
           owner: '',
           valid: true,
+          revision: 0,
         },
   )
   editorVisible.value = true
+}
+
+const openControlEditor = (control?: SecurityControl): void => {
+  Object.assign(
+    controlForm,
+    control
+      ? structuredClone(control)
+      : {
+          id: '',
+          name: '',
+          type: 'preventive',
+          status: 'effective',
+          owner: '',
+          componentId: store.data.components[0]?.id ?? '',
+          description: '',
+          evidenceIds: [],
+          revision: 0,
+        },
+  )
+  controlEditorVisible.value = true
 }
 
 const saveEvidence = (): void => {
@@ -104,9 +150,47 @@ const saveEvidence = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '到期日必须晚于采集日', life: 3000 })
     return
   }
-  store.saveEntity('evidence', { ...form, id: form.id || createId('ev') })
+  const previous = form.id
+    ? store.data.evidence.find((item) => item.id === form.id)
+    : undefined
+  const outcome = store.saveEvidence(
+    { ...form, id: form.id || createId('ev') },
+    previous,
+  )
   editorVisible.value = false
-  toast.add({ severity: 'success', summary: '证据已保存', detail: form.title, life: 2500 })
+  if (outcome.recoveredEntries > 0) {
+    toast.add({ severity: 'warn', summary: '已从修订链恢复', detail: '写入失败后仅补写未完成对象', life: 4000 })
+  }
+  toast.add({
+    severity: 'success',
+    summary: '证据已保存',
+    detail: `已推进 v1.${store.data.currentRevision}，关联威胁与风险接受立即失效重算`,
+    life: 3000,
+  })
+}
+
+const saveControl = (): void => {
+  if (!controlForm.name.trim() || !controlForm.componentId || !controlForm.owner.trim()) {
+    toast.add({ severity: 'error', summary: '校验失败', detail: '名称、所属组件和责任人不能为空', life: 3000 })
+    return
+  }
+  const previous = controlForm.id
+    ? store.data.controls.find((item) => item.id === controlForm.id)
+    : undefined
+  const outcome = store.saveControl(
+    { ...controlForm, id: controlForm.id || createId('ctl') },
+    previous,
+  )
+  controlEditorVisible.value = false
+  if (outcome.recoveredEntries > 0) {
+    toast.add({ severity: 'warn', summary: '已从修订链恢复', detail: '写入失败后仅补写未完成对象', life: 4000 })
+  }
+  toast.add({
+    severity: 'success',
+    summary: '控制已保存',
+    detail: `已推进 v1.${store.data.currentRevision}，关联威胁会签与风险接受需重新签署`,
+    life: 3000,
+  })
 }
 </script>
 
@@ -165,6 +249,31 @@ const saveEvidence = (): void => {
           <Button label="登记证据" icon="pi pi-plus" @click="openEditor()" />
         </div>
       </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">控制清单（改动即触发失效重算）</h2>
+        <Button label="登记/编辑控制" icon="pi pi-plus" size="small" @click="openControlEditor()" />
+      </div>
+      <DataTable :value="store.data.controls" dataKey="id" size="small">
+        <Column field="name" header="控制" />
+        <Column header="所属组件" style="width: 180px">
+          <template #body="{ data }">{{ store.data.components.find((c) => c.id === data.componentId)?.name ?? data.componentId }}</template>
+        </Column>
+        <Column field="owner" header="责任人" style="width: 120px" />
+        <Column header="修订" style="width: 80px">
+          <template #body="{ data }"><span class="mono">v1.{{ data.revision }}</span></template>
+        </Column>
+        <Column header="状态" style="width: 100px">
+          <template #body="{ data }"><StatusTag :value="data.status" kind="status" /></template>
+        </Column>
+        <Column header="操作" style="width: 90px">
+          <template #body="{ data }">
+            <Button label="编辑" size="small" text @click="openControlEditor(data)" />
+          </template>
+        </Column>
+      </DataTable>
     </section>
 
     <section class="panel">
@@ -253,6 +362,60 @@ const saveEvidence = (): void => {
         <Button label="保存证据" icon="pi pi-check" @click="saveEvidence" />
       </template>
     </Dialog>
+
+    <Dialog
+      v-model:visible="controlEditorVisible"
+      :header="controlForm.id ? '编辑控制（关联内容将失效重算）' : '登记控制'"
+      modal
+      :style="{ width: '720px' }"
+    >
+      <div class="editor-form">
+        <div class="field field-wide">
+          <label>控制名称</label>
+          <InputText v-model="controlForm.name" />
+        </div>
+        <div class="field">
+          <label>所属组件</label>
+          <Select
+            v-model="controlForm.componentId"
+            :options="store.data.components"
+            option-label="name"
+            option-value="id"
+            filter
+          />
+        </div>
+        <div class="field">
+          <label>责任人</label>
+          <InputText v-model="controlForm.owner" />
+        </div>
+        <div class="field">
+          <label>控制类型</label>
+          <Select
+            v-model="controlForm.type"
+            :options="controlTypeOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+        <div class="field">
+          <label>控制状态</label>
+          <Select
+            v-model="controlForm.status"
+            :options="controlStatusOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+        <div class="field field-wide">
+          <label>控制说明</label>
+          <Textarea v-model="controlForm.description" rows="3" />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="取消" severity="secondary" outlined @click="controlEditorVisible = false" />
+        <Button label="保存控制" icon="pi pi-check" @click="saveControl" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -285,5 +448,11 @@ const saveEvidence = (): void => {
 
 .filter-panel {
   padding: 14px 16px;
+}
+
+.mono {
+  color: #3268a6;
+  font-family: monospace;
+  font-size: 11px;
 }
 </style>
