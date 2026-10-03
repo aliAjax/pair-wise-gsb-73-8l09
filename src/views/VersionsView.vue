@@ -90,7 +90,8 @@ const createVersion = (): void => {
 const approvalLabel = (snapshot: VersionSnapshot): string =>
   `${snapshot.affectedThreatIds.filter((id) => {
     const threat = store.data.threats.find((item) => item.id === id)
-    return threat?.reviewStatus === 'approved'
+    // 仅当威胁仍停留在该版本修订上且已通过，才算该版本放行
+    return threat?.reviewStatus === 'approved' && threat.revision === snapshot.revision
   }).length}/${snapshot.affectedThreatIds.length}`
 </script>
 

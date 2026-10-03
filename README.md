@@ -12,6 +12,11 @@
 - 开发、安全、业务三方逐项会签
 - 版本快照、版本差异与受影响威胁限定重新审核
 - 控制证据有效期管理、审计轨迹与 Markdown 报告导出
+- **统一修订链**：威胁、控制、证据、风险接受与会签共用只追加的修订链
+  - 页面打开时记住修订号；两个标签页保存同一威胁时，后到编辑保留为草稿并转“待确认”
+  - 控制、证据（及组件/数据流/外部依赖）一改动，关联威胁与风险接受立即在新修订失效，三方重新会签才放行
+  - 两阶段提交（applied 标记），写入失败后从完整修订链幂等恢复，只补未完成对象、不重复追加
+  - 旧数据首次打开自动回填修订依据基线
 - 全部修改自动持久化到 `localStorage`
 
 ## 运行
@@ -27,6 +32,14 @@ npm run dev
 
 ```bash
 npm run build
+```
+
+## 修订链校验脚本
+
+```bash
+npm run build
+node_modules/.bin/esbuild scripts/verify-revision-chain.ts --bundle --platform=node --format=esm --alias:@=./src --outfile=/tmp/verify-chain.mjs && node /tmp/verify-chain.mjs
+node_modules/.bin/esbuild scripts/verify-store-e2e.ts --bundle --platform=node --format=esm --alias:@=./src --outfile=/tmp/verify-e2e.mjs && node /tmp/verify-e2e.mjs
 ```
 
 ## GraphQL

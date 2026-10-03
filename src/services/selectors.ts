@@ -103,6 +103,19 @@ export const getValidationIssues = (state: ThreatModelState): ValidationIssue[] 
       })
     })
 
+  state.risks
+    .filter((risk) => risk.supersededAcceptance && risk.status !== 'accepted')
+    .forEach((risk) => {
+      issues.push({
+        id: `superseded-${risk.id}`,
+        kind: 'risk_acceptance_superseded',
+        severity: riskLevel(riskScore(risk)),
+        title: `${risk.code} 风险接受已随修订失效`,
+        detail: `r${risk.supersededAcceptance?.revision ?? '?'} 的接受条件不再作用于当前有效修订，关联威胁重新会签后需在新修订上重新接受。`,
+        entityId: risk.id,
+      })
+    })
+
   const taskGroups = new Map<string, typeof state.mitigations>()
   state.mitigations.forEach((task) => {
     if (!task.conflictGroup) return
@@ -140,6 +153,16 @@ export const decisionsForThreat = (
   revision: number,
 ): ReviewDecision[] =>
   decisions.filter((decision) => decision.threatId === threatId && decision.revision === revision)
+
+/** 会签页/看板/详情统一使用的“有效修订”待办：审核中或待确认的威胁。 */
+export const actionableThreats = (state: ThreatModelState): Threat[] =>
+  state.threats.filter(
+    (threat) => threat.reviewStatus === 'in_review' || threat.reviewStatus === 'pending_confirmation',
+  )
+
+/** 威胁是否仍停留在当前有效修订上。 */
+export const threatIsCurrent = (state: ThreatModelState, threat: Threat): boolean =>
+  threat.revision >= state.currentRevision || threat.reviewStatus === 'draft'
 
 export const reviewProgress = (decisions: ReviewDecision[]): number => {
   const roles = new Set(decisions.map((decision) => decision.role))

@@ -24,6 +24,8 @@ const statusFilter = ref<string | null>(null)
 const categoryFilter = ref<string | null>(null)
 const selectedId = ref(store.data.threats[0]?.id ?? '')
 const editorVisible = ref(false)
+/** 编辑打开时记住的修订号，作为乐观锁基线 */
+const baseRevision = ref(store.data.currentRevision)
 
 const severityOptions = [
   { label: '严重', value: 'critical' },
@@ -119,6 +121,7 @@ const clearFilters = (): void => {
 const editThreat = (): void => {
   if (!selectedThreat.value) return
   Object.assign(threatForm, structuredClone(selectedThreat.value))
+  baseRevision.value = selectedThreat.value.revision
   editorVisible.value = true
 }
 
@@ -140,7 +143,10 @@ const addThreat = (): void => {
     riskIds: [],
     reviewStatus: 'draft',
     revision: store.data.currentRevision,
+    conflictDraft: undefined,
+    conflictBaseRevision: undefined,
   } satisfies Threat)
+  baseRevision.value = store.data.currentRevision
   editorVisible.value = true
 }
 
@@ -161,21 +167,42 @@ const saveThreat = (): void => {
     return
   }
 
-  const saved: Threat = {
+  const payload: Threat = {
     ...threatForm,
     id: threatForm.id || createId('thr'),
-    revision: threatForm.id ? store.data.currentRevision + 1 : store.data.currentRevision,
-    reviewStatus: threatForm.id ? 'in_review' : threatForm.reviewStatus,
+    conflictDraft: undefined,
+    conflictBaseRevision: undefined,
   }
-  store.saveThreat(saved)
-  selectedId.value = saved.id
+  const result = store.saveThreat({ threat: payload, baseRevision: baseRevision.value })
+  selectedId.value = payload.id
   editorVisible.value = false
-  toast.add({
-    severity: 'success',
-    summary: '威胁已保存',
-    detail: saved.id === threatForm.id ? '修订后已进入重新审核' : saved.title,
-    life: 3000,
-  })
+  if (result.conflict) {
+    toast.add({
+      severity: 'warn',
+      summary: '检测到并发修订',
+      detail: '另一标签页已在更新的修订上保存，您的编辑已保留为草稿并转待确认',
+      life: 4000,
+    })
+  } else {
+    toast.add({
+      severity: 'success',
+      summary: '威胁已保存',
+      detail: payload.id === threatForm.id ? '修订后已进入重新审核' : payload.title,
+      life: 3000,
+    })
+  }
+}
+
+const mergeDraft = (): void => {
+  if (!selectedThreat.value) return
+  store.resolveConflict(selectedThreat.value.id, true)
+  toast.add({ severity: 'success', summary: '草稿已合并', detail: '已在最新有效修订上形成新版本并重新会签', life: 3000 })
+}
+
+const discardDraft = (): void => {
+  if (!selectedThreat.value) return
+  store.resolveConflict(selectedThreat.value.id, false)
+  toast.add({ severity: 'success', summary: '草稿已放弃', detail: '保留先到标签页保存的有效修订', life: 3000 })
 }
 </script>
 
@@ -283,8 +310,47 @@ const saveThreat = (): void => {
             <StatusTag :value="selectedThreat.severity" kind="severity" />
             <StatusTag :value="selectedThreat.status" kind="status" />
             <StatusTag :value="selectedThreat.reviewStatus" kind="review" />
-            <span class="muted">v1.{{ selectedThreat.revision }}</span>
+            <span class="muted">有效修订 r{{ selectedThreat.revision }}</span>
+            <span v-if="selectedThreat.conflictDraft" class="muted">
+              · 草稿基于 r{{ selectedThreat.conflictBaseRevision }}
+            </span>
           </div>
+
+          <section v-if="selectedThreat.conflictDraft" class="conflict-banner">
+            <div class="conflict-head">
+              <i class="pi pi-exclamation-triangle"></i>
+              <div>
+                <strong>并发保存待确认</strong>
+                <p>
+                  另一标签页已在 r{{ selectedThreat.revision }} 保存；本标签页基于
+                  r{{ selectedThreat.conflictBaseRevision }} 的编辑已保留为草稿，需确认后才会进入会签。
+                </p>
+              </div>
+            </div>
+            <div class="conflict-draft">
+              <h4>后到草稿内容</h4>
+              <p>{{ selectedThreat.conflictDraft.description }}</p>
+              <div class="conflict-meta">
+                <StatusTag :value="selectedThreat.conflictDraft.severity" kind="severity" />
+                <StatusTag :value="selectedThreat.conflictDraft.status" kind="status" />
+                <span class="muted">
+                  关联控制 {{ selectedThreat.conflictDraft.controlIds.length }} ·
+                  风险 {{ selectedThreat.conflictDraft.riskIds.length }}
+                </span>
+              </div>
+            </div>
+            <div class="conflict-actions">
+              <Button label="合并草稿到最新修订" icon="pi pi-check" size="small" @click="mergeDraft" />
+              <Button
+                label="放弃草稿，保留先到保存"
+                icon="pi pi-times"
+                size="small"
+                severity="secondary"
+                outlined
+                @click="discardDraft"
+              />
+            </div>
+          </section>
 
           <p class="description">{{ selectedThreat.description }}</p>
 
@@ -504,6 +570,65 @@ const saveThreat = (): void => {
   align-items: center;
   gap: 8px;
   padding: 12px 18px;
+}
+
+.conflict-banner {
+  margin: 0 18px 14px;
+  padding: 14px;
+  border: 1px solid #f2c78f;
+  border-left: 4px solid #d97706;
+  border-radius: 6px;
+  background: #fffaf0;
+  display: grid;
+  gap: 12px;
+}
+
+.conflict-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.conflict-head > i {
+  margin-top: 3px;
+  color: #b45309;
+}
+
+.conflict-head p {
+  margin: 4px 0 0;
+  color: #7b5d2c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.conflict-draft {
+  padding: 11px;
+  border-radius: 5px;
+  background: #fff;
+  border: 1px solid #f0dfc0;
+}
+
+.conflict-draft h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.conflict-draft p {
+  margin: 0 0 8px;
+  color: #5f6a7e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.conflict-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .description {

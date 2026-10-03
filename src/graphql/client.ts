@@ -1,9 +1,9 @@
 import { ApolloClient, ApolloLink, InMemoryCache, Observable } from '@apollo/client/core'
-import { loadState } from '@/services/repository'
+import { loadState, readState } from '@/services/repository'
 import { dashboardMetrics, evidenceIsExpired } from '@/services/selectors'
 
 const resolveOperation = (operationName: string): Record<string, unknown> => {
-  const state = loadState()
+  const state = readState() ?? loadState().state
 
   if (operationName === 'DashboardMetrics') {
     return { dashboardMetrics: dashboardMetrics(state) }

@@ -44,9 +44,15 @@ const form = reactive<{
 })
 
 const latestVersion = computed(() => store.data.versions[0])
+const effectiveRevision = computed(() => store.data.currentRevision)
 const affectedThreats = computed(() => {
-  const ids = latestVersion.value?.affectedThreatIds ?? store.data.threats.map((threat) => threat.id)
-  return store.data.threats.filter((threat) => ids.includes(threat.id))
+  const ids = new Set(latestVersion.value?.affectedThreatIds ?? store.data.threats.map((threat) => threat.id))
+  // 仅展示当前有效修订上仍需会签（审核中或待确认）的威胁
+  return store.data.threats.filter(
+    (threat) =>
+      ids.has(threat.id) &&
+      (threat.reviewStatus === 'in_review' || threat.reviewStatus === 'pending_confirmation'),
+  )
 })
 const selectedThreat = computed(
   () => store.data.threats.find((threat) => threat.id === selectedThreatId.value) ?? null,
@@ -68,6 +74,15 @@ const statusForRole = (threat: Threat, role: ActorRole): DecisionType | 'pending
 
 const openDecision = (): void => {
   if (!selectedThreat.value) return
+  if (selectedThreat.value.reviewStatus === 'pending_confirmation') {
+    toast.add({
+      severity: 'warn',
+      summary: '存在并发冲突',
+      detail: '请先在威胁详情确认合并或放弃草稿，再在新修订上会签',
+      life: 3500,
+    })
+    return
+  }
   form.comment = ''
   form.role = 'security'
   form.actor = '王岚'
@@ -85,15 +100,29 @@ const submitDecision = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '会签意见不能为空', life: 3000 })
     return
   }
-  store.submitDecision(
+  const result = store.submitDecision(
     selectedThreat.value.id,
     form.role,
     form.decision,
     form.actor,
     form.comment,
   )
+  if (!result.ok) {
+    toast.add({ severity: 'warn', summary: '暂不能会签', detail: result.reason ?? '请稍后再试', life: 3500 })
+    return
+  }
   decisionVisible.value = false
-  toast.add({ severity: 'success', summary: '会签意见已提交', detail: '审核状态已重新计算', life: 2500 })
+  toast.add({
+    severity: 'success',
+    summary: '会签意见已提交',
+    detail: `已记录到 r${selectedThreat.value.revision}，三方在同一修订上齐备后放行`,
+    life: 2500,
+  })
+}
+
+const resolveSelected = (merge: boolean): void => {
+  if (!selectedThreat.value) return
+  store.resolveConflict(selectedThreat.value.id, merge)
 }
 
 const decisionLabel = (decision: DecisionType | 'pending'): string =>
@@ -107,23 +136,21 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
     <PageHeader
       eyebrow="受影响范围"
       title="逐项会签中心"
-      :description="`当前版本 ${latestVersion?.label ?? '未建立'} 仅展示受变更影响、需要重新审核的威胁。`"
+      :description="`所有意见按同一有效修订 r${effectiveRevision} 展示；控制或证据变更后，关联威胁必须在新修订上重新三方会签。`"
     />
 
     <section class="version-context">
+      <div>
+        <span>当前有效修订</span>
+        <strong>r{{ effectiveRevision }}</strong>
+      </div>
       <div>
         <span>审核基线</span>
         <strong>{{ latestVersion?.label ?? '尚未建立版本' }}</strong>
       </div>
       <div>
-        <span>受影响威胁</span>
+        <span>有效修订待会签</span>
         <strong>{{ affectedThreats.length }} 条</strong>
-      </div>
-      <div>
-        <span>创建时间</span>
-        <strong>
-          {{ latestVersion ? new Date(latestVersion.createdAt).toLocaleString('zh-CN') : '-' }}
-        </strong>
       </div>
     </section>
 
@@ -138,10 +165,14 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
         >
           <div class="review-card-head">
             <div>
-              <span class="mono">{{ threat.code }}</span>
+              <span class="mono">{{ threat.code }} · r{{ threat.revision }}</span>
               <h2>{{ threat.title }}</h2>
             </div>
             <StatusTag :value="threat.reviewStatus" kind="review" />
+          </div>
+          <div v-if="threat.reviewStatus === 'pending_confirmation'" class="pending-note">
+            <i class="pi pi-exclamation-triangle"></i>
+            并发保存待确认：后到标签页的编辑已保留为草稿，确认后才会进入会签
           </div>
           <div class="role-grid">
             <div v-for="role in roleOptions" :key="role.value" class="role-state">
@@ -163,16 +194,38 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
         <template v-if="selectedThreat">
           <div class="decision-head">
             <div>
-              <span class="mono">{{ selectedThreat.code }}</span>
+              <span class="mono">{{ selectedThreat.code }} · 有效修订 r{{ selectedThreat.revision }}</span>
               <h2>{{ selectedThreat.title }}</h2>
             </div>
             <StatusTag :value="selectedThreat.reviewStatus" kind="review" />
           </div>
           <p class="decision-description">{{ selectedThreat.description }}</p>
-          <Button label="提交会签意见" icon="pi pi-pencil" @click="openDecision" />
+
+          <section v-if="selectedThreat.reviewStatus === 'pending_confirmation'" class="conflict-box">
+            <strong>并发冲突草稿（基于 r{{ selectedThreat.conflictBaseRevision }}）</strong>
+            <p>{{ selectedThreat.conflictDraft?.description }}</p>
+            <div class="conflict-actions">
+              <Button label="合并草稿并进入新会签" icon="pi pi-check" size="small" @click="resolveSelected(true)" />
+              <Button
+                label="放弃草稿"
+                icon="pi pi-times"
+                size="small"
+                severity="secondary"
+                outlined
+                @click="resolveSelected(false)"
+              />
+            </div>
+          </section>
+
+          <Button
+            label="提交会签意见"
+            icon="pi pi-pencil"
+            :disabled="selectedThreat.reviewStatus === 'pending_confirmation'"
+            @click="openDecision"
+          />
 
           <section class="decision-history">
-            <h3>当前版本会签记录</h3>
+            <h3>有效修订 r{{ selectedThreat.revision }} 会签记录</h3>
             <article v-for="decision in currentDecisions" :key="decision.id" class="decision-entry">
               <div>
                 <strong>{{ decision.actor }}</strong>
@@ -182,10 +235,12 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
               <p>{{ decision.comment }}</p>
               <time>{{ new Date(decision.createdAt).toLocaleString('zh-CN') }}</time>
             </article>
-            <div v-if="currentDecisions.length === 0" class="empty-state">尚未提交会签意见。</div>
+            <div v-if="currentDecisions.length === 0" class="empty-state">
+              旧修订会签已随控制/证据变更失效，请三方在 r{{ selectedThreat.revision }} 上重新签署。
+            </div>
           </section>
         </template>
-        <div v-else class="empty-state">从左侧选择一条受影响威胁。</div>
+        <div v-else class="empty-state">从左侧选择一条有效修订上的待会签威胁。</div>
       </aside>
     </div>
 
@@ -327,6 +382,53 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
 .review-progress {
   height: 4px;
   margin-top: 14px;
+}
+
+.pending-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 10px;
+  border: 1px solid #f2c78f;
+  border-radius: 5px;
+  background: #fffaf0;
+  color: #8a5a17;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pending-note > i {
+  margin-top: 2px;
+}
+
+.conflict-box {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #f2c78f;
+  border-left: 4px solid #d97706;
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.conflict-box strong {
+  font-size: 12px;
+  color: #8a5a17;
+}
+
+.conflict-box p {
+  margin: 0;
+  color: #7b5d2c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .decision-panel {

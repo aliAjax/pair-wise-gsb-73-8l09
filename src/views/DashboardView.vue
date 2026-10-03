@@ -33,16 +33,23 @@ const componentName = (id: string): string =>
     <PageHeader
       eyebrow="安全评审工作区"
       title="威胁建模工作台"
-      description="集中查看当前模型覆盖、控制健康度、风险接受与待会签事项。"
+      :description="`所有页面按同一有效修订 r${store.data.currentRevision} 展示；控制、证据变更会即时联动会签与风险接受。`"
     />
 
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+    <Message
+      v-if="store.lastRecoveredCount > 0"
+      severity="warn"
+      :closable="false"
+    >
+      检测到上次写入中断，已从完整修订链恢复 {{ store.lastRecoveredCount }} 条未完成记录，未重复追加会签与审计。
+    </Message>
 
     <div class="metrics-grid">
       <div class="metric">
         <div class="metric-label">建模组件</div>
         <div class="metric-value">{{ metrics?.components ?? store.metrics.components }}</div>
-        <div class="metric-note">{{ store.data.flows.length }} 条数据流已登记</div>
+        <div class="metric-note">{{ store.data.flows.length }} 条数据流已登记 · r{{ store.data.currentRevision }}</div>
       </div>
       <div class="metric">
         <div class="metric-label">开放严重威胁</div>
@@ -61,8 +68,11 @@ const componentName = (id: string): string =>
         />
       </div>
       <div class="metric">
-        <div class="metric-label">待会签</div>
-        <div class="metric-value">{{ metrics?.pendingReviews ?? store.metrics.pendingReviews }}</div>
+        <div class="metric-label">待会签 / 待确认</div>
+        <div class="metric-value">
+          {{ store.data.threats.filter((threat) => threat.reviewStatus === 'in_review').length }}
+          / {{ store.data.threats.filter((threat) => threat.reviewStatus === 'pending_confirmation').length }}
+        </div>
         <div class="metric-note">{{ metrics?.openIssues ?? store.metrics.openIssues }} 项模型校验未关闭</div>
       </div>
     </div>
@@ -81,7 +91,7 @@ const componentName = (id: string): string =>
               <p>{{ issue.detail }}</p>
             </div>
             <RouterLink
-              :to="issue.kind === 'mitigation_conflict' ? '/mitigations' : '/risks'"
+              :to="issue.kind === 'mitigation_conflict' ? '/mitigations' : issue.kind === 'risk_acceptance_superseded' ? '/risks' : '/risks'"
               class="row-link"
             >
               处理
@@ -93,7 +103,7 @@ const componentName = (id: string): string =>
 
       <section class="panel">
         <div class="panel-header">
-          <h2 class="panel-title">版本与会签</h2>
+          <h2 class="panel-title">有效修订待会签</h2>
           <RouterLink to="/reviews" class="text-link">进入会签中心</RouterLink>
         </div>
         <div class="review-list">
@@ -102,14 +112,18 @@ const componentName = (id: string): string =>
             <div class="review-main">
               <strong>{{ threat.title }}</strong>
               <span>
-                v1.{{ threat.revision }} ·
+                r{{ threat.revision }} ·
                 {{ store.reviewProgress(store.data.decisions.filter((decision) => decision.threatId === threat.id && decision.revision === threat.revision)) }}%
                 会签进度
               </span>
             </div>
+            <StatusTag
+              :value="threat.reviewStatus"
+              kind="review"
+            />
             <span class="muted">{{ threat.componentIds.map(componentName).join(' / ') }}</span>
           </article>
-          <div v-if="store.pendingReviews.length === 0" class="empty-state">没有待会签威胁。</div>
+          <div v-if="store.pendingReviews.length === 0" class="empty-state">有效修订上没有待会签威胁。</div>
         </div>
       </section>
     </div>
@@ -208,8 +222,9 @@ const componentName = (id: string): string =>
 
 .review-row {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: center;
   padding: 14px 0;
   border-bottom: 1px solid #edf0f4;
 }
@@ -227,7 +242,7 @@ const componentName = (id: string): string =>
 }
 
 .review-row > .muted {
-  grid-column: 2;
+  grid-column: 2 / -1;
   font-size: 11px;
 }
 

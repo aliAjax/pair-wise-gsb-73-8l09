@@ -1,5 +1,5 @@
 export type Severity = 'critical' | 'high' | 'medium' | 'low'
-export type ReviewStatus = 'draft' | 'in_review' | 'approved' | 'rejected'
+export type ReviewStatus = 'draft' | 'in_review' | 'pending_confirmation' | 'approved' | 'rejected'
 export type ThreatStatus = 'open' | 'mitigating' | 'mitigated' | 'accepted'
 export type ControlStatus = 'effective' | 'degraded' | 'failed' | 'planned'
 export type ActorRole = 'development' | 'security' | 'business'
@@ -62,6 +62,8 @@ export interface ControlEvidence {
   expiresAt: string
   owner: string
   valid: boolean
+  /** 修订依据：证据最后随哪一条修订链记录落盘 */
+  basisRevision?: number
 }
 
 export interface SecurityControl {
@@ -73,6 +75,8 @@ export interface SecurityControl {
   componentId: string
   description: string
   evidenceIds: string[]
+  /** 修订依据：控制最后随哪一条修订链记录落盘 */
+  basisRevision?: number
 }
 
 export interface AttackPath {
@@ -94,6 +98,16 @@ export interface Risk {
   owner: string
   acceptanceExpiresAt?: string
   acceptanceCondition?: string
+  /** 风险接受所依据的修订；关联威胁/控制进入新修订后立即失效 */
+  acceptanceRevision?: number
+  /** 上一条有效接受（因修订链推进而失效时保留，便于重新确认） */
+  supersededAcceptance?: {
+    expiresAt: string
+    condition: string
+    revision: number
+  }
+  /** 修订依据：本条记录最后随哪一条修订链记录落盘 */
+  basisRevision?: number
 }
 
 export interface Threat {
@@ -112,6 +126,12 @@ export interface Threat {
   riskIds: string[]
   reviewStatus: ReviewStatus
   revision: number
+  /** 后到标签页基于过期修订保存时保留下来的草稿，等待人工确认合并 */
+  conflictDraft?: Threat
+  /** 冲突草稿所依据的过期修订号 */
+  conflictBaseRevision?: number
+  /** 修订依据：本条记录最后随哪一条修订链记录落盘 */
+  basisRevision?: number
 }
 
 export interface MitigationTask {
@@ -163,6 +183,64 @@ export interface AuditEvent {
   detail: string
 }
 
+/** 可写入修订链的实体集合 */
+export type ChainCollectionKey =
+  | 'zones'
+  | 'components'
+  | 'dependencies'
+  | 'flows'
+  | 'controls'
+  | 'evidence'
+  | 'threats'
+  | 'attackPaths'
+  | 'risks'
+  | 'mitigations'
+
+/**
+ * 修订链记录：只追加（WAL）。写入分两阶段——先落 applied:false 的记录与完整后像，
+ * 再把后像补进状态并置 applied:true。启动恢复时按 seq 重放，按 id 幂等合并，
+ * 因此未完成的对象会被补齐而审计、会签等追加记录不会重复。
+ */
+export interface RevisionChainEntry {
+  id: string
+  seq: number
+  /** 该记录所属修订号；不推进修订的记录沿用当前修订 */
+  revision: number
+  type:
+    | 'baseline'
+    | 'threat_save'
+    | 'threat_conflict'
+    | 'control_save'
+    | 'evidence_save'
+    | 'entity_save'
+    | 'entity_remove'
+    | 'decision'
+    | 'risk_accept'
+    | 'risk_close'
+    | 'boundary'
+    | 'version'
+  actor: string
+  createdAt: string
+  detail: string
+  applied: boolean
+  /** 级联失效时被推上新修订、需要重新会签的威胁 */
+  affectedThreatIds?: string[]
+  /** 各实体的完整后像（恢复时按 id 覆盖） */
+  threats?: Threat[]
+  controls?: SecurityControl[]
+  evidence?: ControlEvidence[]
+  risks?: Risk[]
+  entities?: { collection: ChainCollectionKey; item: Record<string, unknown> }[]
+  removed?: { collection: ChainCollectionKey; id: string }[]
+  decision?: ReviewDecision
+  decisions?: ReviewDecision[]
+  audit?: AuditEvent
+  auditEvents?: AuditEvent[]
+  boundary?: SystemBoundary
+  snapshot?: VersionSnapshot
+  snapshots?: VersionSnapshot[]
+}
+
 export interface ThreatModelState {
   boundary: SystemBoundary
   zones: TrustZone[]
@@ -179,11 +257,19 @@ export interface ThreatModelState {
   versions: VersionSnapshot[]
   audit: AuditEvent[]
   currentRevision: number
+  /** 只追加的完整修订链，权威恢复来源 */
+  revisionChain: RevisionChainEntry[]
 }
 
 export interface ValidationIssue {
   id: string
-  kind: 'uncovered_component' | 'control_failed' | 'risk_acceptance_expired' | 'mitigation_conflict' | 'missing_evidence'
+  kind:
+    | 'uncovered_component'
+    | 'control_failed'
+    | 'risk_acceptance_expired'
+    | 'risk_acceptance_superseded'
+    | 'mitigation_conflict'
+    | 'missing_evidence'
   severity: Severity
   title: string
   detail: string

@@ -10,6 +10,7 @@ import { useToast } from 'primevue/usetoast'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import type { Risk } from '@/models/domain'
+import { riskEffectiveRevision } from '@/services/revisionChain'
 import { riskLevel, riskScore } from '@/services/selectors'
 import { useThreatModelStore } from '@/stores/threatModel'
 
@@ -48,7 +49,23 @@ const submitAcceptance = (): void => {
   }
   store.acceptRisk(selectedRiskId.value, acceptanceForm.expiresAt, acceptanceForm.condition)
   acceptanceVisible.value = false
-  toast.add({ severity: 'success', summary: '风险接受已记录', detail: '已写入审计轨迹', life: 2500 })
+  toast.add({
+    severity: 'success',
+    summary: '风险接受已记录',
+    detail: '接受依据已绑定当前有效修订，关联威胁变更将立即使其失效',
+    life: 3000,
+  })
+}
+
+const reacceptRisk = (risk: Risk): void => {
+  if (!risk.supersededAcceptance) {
+    openAcceptance(risk)
+    return
+  }
+  selectedRiskId.value = risk.id
+  acceptanceForm.expiresAt = risk.supersededAcceptance.expiresAt
+  acceptanceForm.condition = risk.supersededAcceptance.condition
+  acceptanceVisible.value = true
 }
 </script>
 
@@ -118,9 +135,27 @@ const submitAcceptance = (): void => {
               <StatusTag :value="data.status" kind="status" />
             </template>
           </Column>
-          <Column header="操作" style="width: 180px">
+          <Column header="接受依据" style="width: 150px">
+            <template #body="{ data }">
+              <span v-if="data.status === 'accepted'" class="basis-line">
+                r{{ data.acceptanceRevision ?? '?' }} · 至 {{ data.acceptanceExpiresAt }}
+              </span>
+              <span v-else-if="data.supersededAcceptance" class="superseded-line">
+                r{{ data.supersededAcceptance.revision }} 接受已失效
+              </span>
+              <span v-else class="muted">-</span>
+            </template>
+          </Column>
+          <Column header="操作" style="width: 230px">
             <template #body="{ data }">
               <Button label="接受" size="small" text @click="openAcceptance(data)" />
+              <Button
+                v-if="data.supersededAcceptance"
+                label="重新接受"
+                size="small"
+                text
+                @click="reacceptRisk(data)"
+              />
               <Button label="关闭" size="small" text @click="store.closeRisk(data.id)" />
             </template>
           </Column>
@@ -130,7 +165,7 @@ const submitAcceptance = (): void => {
       <aside class="validation-panel">
         <h2>风险校验</h2>
         <article
-          v-for="issue in store.issues.filter((item) => ['risk_acceptance_expired', 'control_failed', 'missing_evidence'].includes(item.kind))"
+          v-for="issue in store.issues.filter((item) => ['risk_acceptance_expired', 'risk_acceptance_superseded', 'control_failed', 'missing_evidence'].includes(item.kind))"
           :key="issue.id"
           class="validation-item"
           :class="{ error: issue.severity === 'critical' || issue.severity === 'high' }"
@@ -148,8 +183,14 @@ const submitAcceptance = (): void => {
     <Dialog v-model:visible="acceptanceVisible" header="记录风险接受" modal :style="{ width: '620px' }">
       <div v-if="selectedRisk" class="selected-risk">
         <strong>{{ selectedRisk.code }} · {{ selectedRisk.title }}</strong>
-        <span>评分 {{ riskScore(selectedRisk) }} / 25</span>
+        <span>
+          评分 {{ riskScore(selectedRisk) }} / 25 ·
+          绑定有效修订 r{{ riskEffectiveRevision(store.data, selectedRisk.id) }}
+        </span>
       </div>
+      <p v-if="selectedRisk?.supersededAcceptance" class="superseded-note">
+        r{{ selectedRisk.supersededAcceptance.revision }} 的历史接受已随修订失效，确认后将在当前有效修订上重新生效。
+      </p>
       <div class="acceptance-form">
         <div class="field">
           <label>接受到期日</label>
@@ -249,5 +290,29 @@ const submitAcceptance = (): void => {
 .acceptance-form {
   display: grid;
   gap: 16px;
+}
+
+.basis-line {
+  color: #2e684f;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.superseded-line {
+  color: #b45309;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.superseded-note {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #f2c78f;
+  border-left: 3px solid #d97706;
+  border-radius: 5px;
+  background: #fffaf0;
+  color: #7b5d2c;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>
